@@ -3,6 +3,7 @@ import os
 import sys
 import comtypes.client
 import comtypes.tools.codegenerator
+import imp
 
 import logging
 logger = logging.getLogger(__name__)
@@ -21,7 +22,11 @@ def _my_import(fullname):
     if comtypes.client.gen_dir \
            and comtypes.client.gen_dir not in comtypes.gen.__path__:
         comtypes.gen.__path__.append(comtypes.client.gen_dir)
-    return __import__(fullname, globals(), locals(), ['DUMMY'])
+
+    mod = imp.reload(eval(fullname)) if fullname in sys.modules \
+            else __import__(fullname, globals(), locals(), ['DUMMY'])
+    mod._comtypes_validate_file()
+    return mod
 
 def _name_module(tlib):
     # Determine the name of a typelib wrapper module.
@@ -149,8 +154,10 @@ def _CreateWrapper(tlib, pathname=None):
     # helper which creates and imports the real typelib wrapper module.
     fullname = _name_module(tlib)
     try:
-        return sys.modules[fullname]
-    except KeyError:
+        mod = sys.modules[fullname]
+        mod._comtypes_validate_file()
+        return mod
+    except (KeyError, AttributeError):
         pass
 
     modname = fullname.split(".")[-1]
@@ -162,11 +169,9 @@ def _CreateWrapper(tlib, pathname=None):
 
     # generate the module since it doesn't exist or is out of date
     from comtypes.tools.tlbparser import generate_module
-    if comtypes.client.gen_dir is None:
-        import cStringIO
-        ofi = cStringIO.StringIO()
-    else:
-        ofi = open(os.path.join(comtypes.client.gen_dir, modname + ".py"), "w")
+    import cStringIO
+    ofi = cStringIO.StringIO()
+
     # XXX use logging!
     logger.info("# Generating comtypes.gen.%s", modname)
     generate_module(tlib, ofi, pathname)
@@ -180,7 +185,8 @@ def _CreateWrapper(tlib, pathname=None):
         sys.modules[fullname] = mod
         setattr(comtypes.gen, modname, mod)
     else:
-        ofi.close()
+        with open(os.path.join(comtypes.client.gen_dir, modname + ".py"), "w") as fd:
+            fd.write(ofi.getvalue())
         mod = _my_import(fullname)
     return mod
 
